@@ -1,4 +1,4 @@
-![Crew: the right model for every job](assets/crew-hero.png)
+![Crew: the right model for every job](assets/crew-formation.png)
 
 # Crew
 
