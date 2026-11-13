@@ -1,6 +1,6 @@
 {
   "name": "crew",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "description": "An experiment: Opus at medium effort as the everyday model, Haiku helpers for searching and log reading, and a Fable advisor asked only at named decision points. Off until /crew takeoff; /crew land puts everything back.",
   "author": {
     "name": "petertrawka"

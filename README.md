@@ -31,6 +31,8 @@ to a small model, let simple code pick the model rather than another model, and 
   decide.
 - **Shows where your week goes.** `/crew pace` gives one line on how your week compares with a normal week by this
   day. `/crew log` opens a page with a bar per day, split by model, plus dots for advisor calls, boosts and handoffs.
+  The landing report at `/crew land` also says who picked Fable: you in a main chat, a helper started on Fable,
+  or the advisor.
   It reads your saved chats on your own machine and makes no AI calls.
 
 ## Install

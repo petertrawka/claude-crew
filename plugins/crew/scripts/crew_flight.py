@@ -157,6 +157,13 @@ def landing(since):
     lines.append("")
     lines.append(f"Advisor calls: {s['advisor_calls']} · /crew boost: {s['boost']} · handoffs: {s['handoffs']} "
                  f"(to Fable: {s['fable_handoffs']})")
+    split = ct.fable_split(d, since=since)
+    ftot = sum(v[1] for v in split.values())
+    if ftot:
+        short = {"main": "you, in main chats", "asked": "helpers started on Fable", "inherited": "helpers that inherited it",
+                 "advisor-main": "advisor in your chats", "advisor-helper": "advisor in helpers and tickets"}
+        lines.append("Who picked Fable: " + ", ".join(f"{short[k]} {100 * v[1] / ftot:.0f}%"
+                                                      for k, v in split.items() if v[0]) + ".")
     lines.append(NOT_BAR)
     return "\n".join(lines)
 

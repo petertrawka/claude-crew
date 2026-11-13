@@ -239,7 +239,9 @@ def read_file(d, path, start, end, helper_meta=None):
             if w1 + w5 < wtot:
                 w5 += wtot - w1 - w5
             fam = family(model)
-            r = {"when": when, "session": sid, "project": s["project"], "kind": kind, "agent": agent_type,
+            # Who set the model: the main chat itself, or for a helper whether its starter named a model.
+            picked = "main" if not is_helper else ("asked" if (helper_meta or {}).get("model") else "inherited")
+            r = {"when": when, "session": sid, "project": s["project"], "kind": kind, "agent": agent_type, "picked": picked,
                  "model": model, "family": fam, "effort": m.get("effort"),
                  "input": u.get("input_tokens", 0) or 0, "w5": w5, "w1": w1,
                  "read": u.get("cache_read_input_tokens", 0) or 0, "output": u.get("output_tokens", 0) or 0}
@@ -474,6 +476,31 @@ def money(x):
     return f"${x:,.2f}"
 
 
+FABLE_ROWS = (
+    ("main", "Main chat on Fable", "You picked Fable for the chat (/model, or a Fable handoff)"),
+    ("asked", "Helper started on Fable", "The chat named Fable when it started the helper (sometimes because you asked)"),
+    ("inherited", "Helper on Fable, no model named", "It took the chat's model, or its helper file names Fable"),
+    ("advisor-main", "Advisor, main chat", "Claude called the advisor in a chat with you"),
+    ("advisor-helper", "Advisor, helpers and ticket builds", "A helper called the advisor on its own"),
+)
+
+
+def fable_split(d, since=None):
+    """Fable spend by who set it. Returns {row key: [count, price]}; the rows add up to all Fable spend."""
+    out = {k: [0, 0.0] for k, _, _ in FABLE_ROWS}
+    for r in d.replies:
+        if r["family"] == "fable" and not (since and r["when"] < since):
+            k = r.get("picked") or "main"
+            out[k][0] += 1
+            out[k][1] += r["price"]
+    for a in d.advisor:
+        if a["family"] == "fable" and not (since and a["when"] < since):
+            k = "advisor-main" if a["kind"] in ("main", "ticket-main") else "advisor-helper"
+            out[k][0] += 1
+            out[k][1] += a["price"]
+    return out
+
+
 def report(start, end, out_path=None, label=False, json_path=None, cache_path=None):
     d = collect(start, end)
     sessions = {k: s for k, s in d.sessions.items() if s["start"] is not None or s["replies"]}
@@ -549,6 +576,25 @@ def report(start, end, out_path=None, label=False, json_path=None, cache_path=No
         lines.append("")
         lines.append("Helpers by type: " + ", ".join(f"{k} {money(v)}" for k, v in top) + ".")
     ticket_share = sum(sum(kinds.get(k, {}).values()) for k in ("ticket", "ticket-main")) / total if total else 0
+    lines.append("")
+
+    # who picked Fable
+    split = fable_split(d)
+    ftot = sum(v[1] for v in split.values())
+    lines.append("## Who picked Fable")
+    lines.append("")
+    if ftot:
+        lines.append("| Where Fable ran | What it means | Replies or calls | Price-equivalent | Share of Fable |")
+        lines.append("|---|---|---|---|---|")
+        for k, name, meaning in FABLE_ROWS:
+            n, p = split[k]
+            if n:
+                lines.append(f"| {name} | {meaning} | {n} | {money(p)} | {100 * p / ftot:.0f}% |")
+        lines.append(f"| **All Fable** | | {sum(v[0] for v in split.values())} | **{money(ftot)}** | 100% |")
+        lines.append("")
+        lines.append("The saved chats show which chat started a helper on Fable, not whether you asked it to.")
+    else:
+        lines.append("No Fable in this range.")
     lines.append("")
 
     # by project

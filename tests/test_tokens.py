@@ -92,6 +92,34 @@ class TokensTest(unittest.TestCase):
         types = sorted(e["type"] for e in events)
         self.assertEqual(types, ["advisor", "boost"])
 
+    def test_fable_split(self):
+        cwd = "/Users/x/Documents/VS Code Projects/beta"
+        p = os.path.join(self.tmp, "-beta")
+        os.makedirs(os.path.join(p, "s2", "subagents"))
+        with open(os.path.join(p, "s2.jsonl"), "w") as f:
+            f.write(json.dumps(user("2026-11-07T09:00:00Z", cwd, "s2", "hello")) + "\n")
+            f.write(json.dumps(asst("f1", "claude-fable-5-2", "2026-11-07T09:00:05Z", cwd, "s2")) + "\n")
+        sub = os.path.join(p, "s2", "subagents")
+        for name, mid, model, meta, adv in (
+                ("agent-b1", "f2", "claude-fable-5-2", {"agentType": "general-purpose", "model": "fable",
+                                                        "description": "Fable review"}, None),
+                ("agent-b2", "f3", "claude-fable-5-2", {"agentType": "general-purpose", "description": "help"}, None),
+                ("agent-b3", "o1", "claude-opus-5-5", {"agentType": "general-purpose", "description": "Run ticket 02"},
+                 "claude-fable-5-2")):
+            with open(os.path.join(sub, name + ".jsonl"), "w") as f:
+                f.write(json.dumps(asst(mid, model, "2026-11-07T09:01:00Z", cwd, "s2", advisor=adv)) + "\n")
+            json.dump(meta, open(os.path.join(sub, name + ".meta.json"), "w"))
+        d = self.ct.collect(dt.date(2026, 11, 1), dt.date(2026, 11, 11))
+        split = self.ct.fable_split(d)
+        self.assertEqual({k: v[0] for k, v in split.items()},
+                         {"main": 1, "asked": 1, "inherited": 1, "advisor-main": 1, "advisor-helper": 1})
+        fable_total = (sum(r["price"] for r in d.replies if r["family"] == "fable")
+                       + sum(a["price"] for a in d.advisor if a["family"] == "fable"))
+        self.assertAlmostEqual(sum(v[1] for v in split.values()), fable_total)
+        text = self.ct.report(dt.date(2026, 11, 1), dt.date(2026, 11, 11))[0]
+        self.assertIn("## Who picked Fable", text)
+        self.assertIn("| Helper started on Fable |", text)
+
     def test_price(self):
         # Haiku: matches Claude Code's own figure for test t1 ($0.00531711).
         self.assertAlmostEqual(self.ct.price("haiku", 2, 0, 25650, 11391, 146), 0.00531711, places=6)
