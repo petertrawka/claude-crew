@@ -11,10 +11,10 @@ import sys
 RULES = """Crew rules:
 1. An empty helper search is not proof; check before saying something doesn't exist.
 2. If a test, build or script can check the job, run it before saying done.
-3. Call the advisor only when the same fix failed twice, the user corrected you twice, the user typed /crew boost, or once before a big multi-file job; never as a routine pre-done check, never on Fable. Say in one line why you called it.
+3. Call the advisor only when the same fix failed twice, the user corrected you twice, or the user typed /crew boost; in a main chat with the user present, also once before a big multi-file job. Never at the start of a helper or ticket build, never as a routine pre-done check, never on Fable. Say in one line why you called it.
 4. Start every helper prompt with "Do not call the advisor tool." No code writing by Haiku helpers.
 5. Suggest a handoff or /compact before a chat gets long (each advisor call rereads it all).
-6. For finding files or searching code, use the Explore helper (runs on Haiku); for reading long logs or test output, use crew:log-reader. Never use general-purpose for these: it runs on the main model. general-purpose is only for jobs that need judgment or edits."""
+6. For finding files or searching code, use the Explore helper (runs on Haiku); for reading long logs or test output, use crew:log-reader. Never use general-purpose for these: it runs on the main model. general-purpose is only for jobs that need judgment or edits. Explore finds where things are; it does not judge how code works. One narrow question per call. Open the file yourself before acting on what it reports."""
 
 
 def main():

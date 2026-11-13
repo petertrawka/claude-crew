@@ -24,8 +24,9 @@ to a small model, let simple code pick the model rather than another model, and 
   settings by hand while crew is on, land leaves your change alone and tells you.
 - **Adds a Haiku search helper** (`~/.claude/agents/Explore.md`, marked "made by crew"; land deletes it) and a
   read-only `log-reader` helper.
-- **Rules for the advisor.** Claude calls it only when the same fix failed twice, you corrected it twice, you type
-  `/crew boost`, or once before a big multi-file job, and says in one line why. Never as a routine check.
+- **Rules for the advisor.** Claude calls it only when the same fix failed twice, you corrected it twice, or you type
+  `/crew boost` (in a chat you're in, also once before a big multi-file job), and says in one line why. Never
+  as a routine check, and never at the start of a helper or unattended ticket build.
 - **Never switches models by itself.** When a job stays stuck, `/crew boost` suggests a fresh chat on Fable; you
   decide.
 - **Shows where your week goes.** `/crew pace` gives one line on how your week compares with a normal week by this
