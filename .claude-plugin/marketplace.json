@@ -1,0 +1,14 @@
+{
+  "name": "crew",
+  "owner": {
+    "name": "petertrawka"
+  },
+  "description": "Crew: a model per job in Claude Code (an experiment).",
+  "plugins": [
+    {
+      "name": "crew",
+      "source": "./plugins/crew",
+      "description": "Opus medium by default, Haiku for searching and logs, a Fable advisor only on named triggers. Off until /crew takeoff."
+    }
+  ]
+}
