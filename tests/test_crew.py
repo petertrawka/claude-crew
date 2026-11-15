@@ -364,6 +364,16 @@ class CrewTest(unittest.TestCase):
         self.assertIsNone(self.loop(session="other-session"))
         self.assertIsNotNone(self.loop(session="other-session"))
 
+    def test_loop_changed_error_is_progress_not_a_loop(self):
+        self.crew.takeoff(self.data)
+        a1 = {"exit_code": 1, "stdout": "FAILED test_a.py::test_x - assert 1 == 2\n1 failed in 0.04s"}
+        a2 = {"exit_code": 1, "stdout": "FAILED test_a.py::test_x - assert 1 == 2\n1 failed in 0.31s"}
+        b = {"exit_code": 1, "stdout": "FAILED test_a.py::test_y - KeyError: 'name'\n1 failed in 0.05s"}
+        self.assertIsNone(self.loop(response=a1))
+        self.assertIsNone(self.loop(response=b))   # different error: the fix changed something
+        self.assertIsNone(self.loop(response=a1))  # changed again
+        self.assertIsNotNone(self.loop(response=a2))  # same error, only the timing differs
+
     def test_loop_pass_resets_consecutive_failures(self):
         self.crew.takeoff(self.data)
         self.assertIsNone(self.loop())

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Nudge once per test/build/check command per session after consecutive failures.
+"""Nudge once per test/build/check command per session after it fails twice in a row with the same error.
 
 https://code.claude.com/docs/en/hooks#posttoolusefailure documents failed Bash
 calls with hook_event_name=PostToolUseFailure and error='Exit code N\n...'.
@@ -84,6 +84,32 @@ def failed(event):
     return bool(re.search(r'\b(?:failed|failure[s]?)\b|\berror:|\berror TS\d+|\b[1-9]\d* errors?\b', output, re.I))
 
 
+ERROR_LINE = re.compile(r'FAILED|ERROR|Error|error[:\s]|assert|Exception|Traceback|panicked|\bfailed\b|✗|×')
+
+
+def error_signature(event):
+    """A fingerprint of the error, so a changed error counts as progress, not a loop.
+
+    Takes the lines that look like errors (or the last 5 lines if none do), drops timings,
+    memory addresses and temp-folder names that change on every run, and hashes the rest.
+    """
+    response = event.get('tool_response', {})
+    parts = [str(event.get('error', ''))]
+    if isinstance(response, dict):
+        parts += [str(response.get(k, '')) for k in ('stdout', 'stderr', 'output', 'error')]
+    else:
+        parts.append(str(response))
+    lines = [l.strip() for l in '\n'.join(parts).splitlines() if l.strip()]
+    picked = [l for l in lines if ERROR_LINE.search(l)] or lines[-5:]
+    clean = []
+    for l in picked:
+        l = re.sub(r'\b\d+(?:\.\d+)?\s*(?:ms|s|sec|seconds)\b', '<t>', l)
+        l = re.sub(r'0x[0-9a-fA-F]+', '<addr>', l)
+        l = re.sub(r'/(?:private/)?(?:tmp|var/folders)/\S+', '<tmp>', l)
+        clean.append(l)
+    import hashlib
+    return hashlib.sha1('\n'.join(sorted(set(clean)))[:20000].encode()).hexdigest()[:16]
+
 def main():
     try:
         data = os.environ.get('CLAUDE_PLUGIN_DATA', '')
@@ -119,7 +145,14 @@ def main():
                     return
                 del state[victim]
             entry = state.setdefault(key, {'failures': 0, 'nudged': False})
-            entry['failures'] = min(entry['failures'] + 1, 2) if failure else 0
+            if failure:
+                sig = error_signature(event)
+                # Twice only if the error is the same; a new error means the last fix changed something.
+                entry['failures'] = 2 if entry['failures'] >= 1 and entry.get('sig') == sig else 1
+                entry['sig'] = sig
+            else:
+                entry['failures'] = 0
+                entry.pop('sig', None)
             nudge = entry['failures'] == 2 and not entry['nudged']
             if nudge:
                 entry['nudged'] = True
