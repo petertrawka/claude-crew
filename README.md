@@ -27,6 +27,9 @@ to a small model, let simple code pick the model rather than another model, and 
 - **Rules for the advisor.** Claude calls it only when the same fix failed twice, you corrected it twice, or you type
   `/crew boost` (in a chat you're in, also once before a big multi-file job), and says in one line why. Never
   as a routine check, and never at the start of a helper or unattended ticket build.
+- **Guards helpers in code, not just in words.** While crew is on, a hook adds "Do not call the advisor tool." to
+  every helper's prompt, and turns away a search-only job sent to the general-purpose helper (which runs on your
+  main model), pointing Claude to the Haiku helpers instead.
 - **Never switches models by itself.** When a job stays stuck, `/crew boost` suggests a fresh chat on Fable; you
   decide.
 - **Shows where your week goes.** `/crew pace` gives one line on how your week compares with a normal week by this

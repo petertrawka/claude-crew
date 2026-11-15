@@ -327,5 +327,47 @@ class CrewTest(unittest.TestCase):
         self.assertEqual(r.stdout, "")
 
 
+    def test_helper_guard(self):
+        import subprocess
+        hook = os.path.join(HERE, "..", "plugins", "crew", "hooks", "helper_guard.py")
+        env = dict(os.environ, CLAUDE_PLUGIN_DATA=self.data)
+
+        def run(tool_input, tool="Agent"):
+            ev = json.dumps({"hook_event_name": "PreToolUse", "tool_name": tool, "tool_input": tool_input})
+            r = subprocess.run(["python3", hook], input=ev, capture_output=True, text=True, env=env)
+            self.assertEqual(r.returncode, 0)
+            return json.loads(r.stdout)["hookSpecificOutput"] if r.stdout else None
+
+        build = {"description": "Fix parser", "prompt": "Fix the date parser in a.py", "subagent_type": "general-purpose"}
+        # Off: silent.
+        self.assertIsNone(run(build))
+        self.crew.takeoff(self.data)
+        # On: line added, other fields kept.
+        out = run(build)
+        self.assertEqual(out["permissionDecision"], "allow")
+        self.assertTrue(out["updatedInput"]["prompt"].startswith("Do not call the advisor tool.\n\nFix the date"))
+        self.assertEqual(out["updatedInput"]["description"], "Fix parser")
+        self.assertEqual(out["updatedInput"]["subagent_type"], "general-purpose")
+        # Already has the line: silent.
+        self.assertIsNone(run({"prompt": "Do not call the advisor tool. Explain why X", "subagent_type": "Plan"}))
+        # Search on general-purpose (or no type): refused, pointing at Explore.
+        for t in ({"prompt": "Find where the advisor rule is defined", "subagent_type": "general-purpose"},
+                  {"prompt": "Do not call the advisor tool. Search the repo for advisorModel"},
+                  {"description": "Locate config files", "prompt": "Look in the crew folder for json files"}):
+            out = run(t)
+            self.assertEqual(out["permissionDecision"], "deny", t)
+            self.assertIn("Explore", out["permissionDecisionReason"])
+        # Search that also asks for an edit: allowed (line added).
+        self.assertEqual(run({"prompt": "Find the parser and fix the bug", "subagent_type": "general-purpose"})
+                         ["permissionDecision"], "allow")
+        # Search on Explore: allowed, line added.
+        out = run({"prompt": "Find where the advisor rule is defined", "subagent_type": "Explore"})
+        self.assertEqual(out["permissionDecision"], "allow")
+        # Other tools and junk input: silent.
+        self.assertIsNone(run({"command": "ls"}, tool="Bash"))
+        r = subprocess.run(["python3", hook], input="not json", capture_output=True, text=True, env=env)
+        self.assertEqual((r.returncode, r.stdout), (0, ""))
+
+
 if __name__ == "__main__":
     unittest.main()
