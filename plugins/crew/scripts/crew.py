@@ -9,7 +9,8 @@
   crew.py check                read-only leftover check (works without the plugin)
 
 Takeoff writes a receipt in crew's data folder BEFORE it changes anything.
-Land undoes only the receipt, then deletes it. No receipt means crew is off.
+A backup with manual undo steps lives in ~/.claude/crew-receipt.json and the keep folder.
+Land can recover from that backup if plugin data is gone, then removes crew's receipts.
 
 It changes only these values in ~/.claude/settings.json:
   model, advisorModel, modelSettings -> claude-opus-5-5 -> effortLevel
@@ -29,6 +30,7 @@ HOME = os.environ.get("CREW_HOME") or os.environ.get("CLAUDE_CONFIG_DIR") or os.
 SETTINGS = os.path.join(HOME, "settings.json")
 AGENTS = os.path.join(HOME, "agents")
 EXPLORE = os.path.join(AGENTS, "Explore.md")
+BACKUP = os.path.join(HOME, "crew-receipt.json")
 MARKER = "made by crew"
 NOT_SET = "<not set>"
 OPUS_ID = "claude-opus-5-5"
@@ -238,6 +240,47 @@ def save_receipt(data_dir, receipt):
     os.replace(tmp, p)
 
 
+def owned_backup(path):
+    """Only marked receipts belong to crew; leave foreign or unreadable files alone."""
+    try:
+        with open(path, encoding="utf-8") as f:
+            receipt = json.load(f)
+        return receipt if isinstance(receipt, dict) and receipt.get("made_by") == "crew" else None
+    except (OSError, ValueError):
+        return None
+
+
+def backup_paths(receipt):
+    paths = [BACKUP]
+    if receipt.get("keep_dir"):
+        paths.append(os.path.join(receipt["keep_dir"], "crew-receipt.json"))
+    return list(dict.fromkeys(paths))
+
+
+def check_backups_free(receipt):
+    for path in backup_paths(receipt):
+        if os.path.lexists(path):
+            raise Stop(f"Receipt backup already exists at {path}. Land or move it first; crew won't overwrite it.")
+
+
+def save_backups(receipt):
+    check_backups_free(receipt)
+    for path in backup_paths(receipt):
+        try:
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            with open(path, "x", encoding="utf-8") as f:
+                json.dump(receipt, f, indent=2)
+                f.write("\n")
+        except OSError as e:
+            raise Stop(f"Can't save receipt backup {path}: {e}. Run /crew land before trying again.")
+
+
+def remove_backups(receipt):
+    for path in backup_paths(receipt):
+        if owned_backup(path):
+            os.remove(path)
+
+
 def explore_state():
     """'none', 'crew' (has the marker in its first lines) or 'other'."""
     if not os.path.exists(EXPLORE):
@@ -423,7 +466,7 @@ class Lock:
 
 def takeoff(data_dir, cwd=None):
     out = []
-    existing = load_receipt(data_dir)
+    existing = load_receipt(data_dir) or owned_backup(BACKUP)
     if existing:
         out.append("Crew is already on (since " + existing.get("taken_at", "?") + "). Nothing changed.")
         out.append("Type /crew land to turn it off.")
@@ -445,6 +488,8 @@ def takeoff(data_dir, cwd=None):
             if parent not in created_parents:
                 created_parents.append(parent)
     receipt = {
+        "made_by": "crew",
+        "keep_dir": config(data_dir).get("keep_dir"),
         "taken_at": now(),
         "settings_file": SETTINGS,
         "values": values,
@@ -453,8 +498,17 @@ def takeoff(data_dir, cwd=None):
         "created_parents": created_parents,
         "snapshot_before": snapshot(),
     }
+    receipt["undo_by_hand"] = [
+        f'remove "{v["key"]}"' if v["old"] == NOT_SET
+        else f'set "{v["key"]}" back to {json.dumps(v["old"])}'
+        for v in values
+    ]
+    receipt["undo_by_hand"].extend(
+        f"delete {p}" for p in receipt["files_created"] + ([EXPLORE] if ex == "crew" else []))
+    check_backups_free(receipt)  # before anything is written, so a foreign file there changes nothing
     # Receipt first, so a takeoff that stops halfway can still be undone.
     save_receipt(data_dir, receipt)
+    save_backups(receipt)
     if ex == "none":
         os.makedirs(AGENTS, exist_ok=True)
         new_folder = not listing("agents")
@@ -462,6 +516,7 @@ def takeoff(data_dir, cwd=None):
             with open(EXPLORE, "x", encoding="utf-8") as f:  # never overwrite a file that appeared meanwhile
                 f.write(EXPLORE_TEXT)
         except FileExistsError:
+            remove_backups(receipt)
             os.remove(receipt_path(data_dir))
             raise Stop("An Explore.md appeared in ~/.claude/agents/ while crew was starting. Crew changed nothing.")
         if new_folder:
@@ -481,6 +536,7 @@ def takeoff(data_dir, cwd=None):
     out.append("  search helper: Explore on Haiku (~/.claude/agents/Explore.md)")
     olds = ", ".join(f"{LABELS[v['key']]} {show(v['old'])}" for v in values)
     out.append(f"To undo by hand if crew is ever gone: set {olds} (see 'Undo by hand' in the crew README).")
+    out.append(f"Receipt and manual undo steps saved outside the plugin: {BACKUP}")
     for n in overrides(cwd or os.getcwd()):
         out.append("Warning: " + n)
     adv = advisor_active()
@@ -493,7 +549,7 @@ def takeoff(data_dir, cwd=None):
 
 def land(data_dir):
     out = []
-    receipt = load_receipt(data_dir)
+    receipt = load_receipt(data_dir) or owned_backup(BACKUP)
     if not receipt:
         out.append("Crew is off. Nothing to do.")
         return out
@@ -526,7 +582,9 @@ def land(data_dir):
             pass
     after = snapshot()
     diffs = compare(receipt["snapshot_before"], after)
-    os.remove(receipt_path(data_dir))
+    remove_backups(receipt)
+    if os.path.exists(receipt_path(data_dir)):
+        os.remove(receipt_path(data_dir))
     record(data_dir, "land")
     card = landing_card(receipt["taken_at"])
     out.append("Crew is off.")
@@ -626,6 +684,8 @@ def check():
     out.append("crew lines in settings: " + (str(lines) if lines else "none"))
     import glob
     files = [p for p in glob.glob(os.path.join(AGENTS, "*.md")) if MARKER in open(p, encoding="utf-8").read(400).lower()]
+    if owned_backup(BACKUP):
+        files.append(BACKUP)
     files += glob.glob(os.path.join(HOME, "plugins", "data", "crew*"))
     files += glob.glob(os.path.join(HOME, "plugins", "cache", "*crew*"))
     out.append("crew files: " + (str(files) if files else "none"))

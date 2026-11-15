@@ -105,6 +105,7 @@ class CrewTest(unittest.TestCase):
             self.crew.takeoff(self.data)
         self.crew.write_settings = orig
         self.assertTrue(os.path.exists(os.path.join(self.data, "receipt.json")))
+        self.assertTrue(os.path.exists(self.crew.BACKUP))
         # Land still works and leaves everything as it was.
         before = json.dumps(TYPICAL_SETTINGS, indent=2) + "\n"
         self.crew.land(self.data)
@@ -290,6 +291,7 @@ class CrewTest(unittest.TestCase):
         self.assertIn("someone else's", open(self.explore()).read())
         self.assertEqual(self.raw(), before)
         self.assertFalse(os.path.exists(os.path.join(self.data, "receipt.json")))
+        self.assertFalse(os.path.exists(self.crew.BACKUP))
 
     def test_lock_blocks_second_command(self):
         with self.crew.Lock(self.data):
@@ -326,6 +328,155 @@ class CrewTest(unittest.TestCase):
         self.assertEqual(r.returncode, 0)
         self.assertEqual(r.stdout, "")
 
+    def loop(self, command="pytest -q", response=None, event="PostToolUse", session="test-session", raw=None):
+        import subprocess
+        hook = os.path.join(HERE, "..", "plugins", "crew", "hooks", "loop_watch.py")
+        payload = {"hook_event_name": event, "tool_name": "Bash", "session_id": session,
+                   "tool_input": {"command": command},
+                   "tool_response": response if response is not None else {"exit_code": 1}}
+        if event == "PostToolUseFailure":
+            payload["error"] = "Exit code 1\nError: test failed"
+        result = subprocess.run(["python3", hook], input=raw if raw is not None else json.dumps(payload),
+                                capture_output=True, text=True,
+                                env=dict(os.environ, CLAUDE_PLUGIN_DATA=self.data))
+        self.assertEqual((result.returncode, result.stderr), (0, ""))
+        return json.loads(result.stdout)["hookSpecificOutput"] if result.stdout else None
+
+    def test_loop_off_and_first_failure_silent(self):
+        self.assertIsNone(self.loop())
+        self.assertFalse(os.path.exists(os.path.join(self.data, "loops")))
+        self.crew.takeoff(self.data)
+        self.assertIsNone(self.loop())
+        self.crew.land(self.data)
+        self.assertIsNone(self.loop())
+
+    def test_loop_twice_fail_nudge_once_and_normalisation(self):
+        self.crew.takeoff(self.data)
+        self.assertIsNone(self.loop(command='cd "some folder" && pytest   -q 2>&1 | tail -20'))
+        out = self.loop()
+        self.assertEqual(out["hookEventName"], "PostToolUse")
+        self.assertIn("`pytest -q` has failed twice in a row", out["additionalContext"])
+        self.assertNotIn("decision", out)
+        self.assertIsNone(self.loop())
+        self.assertIsNone(self.loop(response={"exit_code": 0}))
+        self.assertIsNone(self.loop())
+        self.assertIsNone(self.loop())  # once per session, even after a pass
+        self.assertIsNone(self.loop(session="other-session"))
+        self.assertIsNotNone(self.loop(session="other-session"))
+
+    def test_loop_pass_resets_consecutive_failures(self):
+        self.crew.takeoff(self.data)
+        self.assertIsNone(self.loop())
+        self.assertIsNone(self.loop(response={"exit_code": 0, "stdout": "failed is just a word"}))
+        self.assertIsNone(self.loop())
+        self.assertIsNotNone(self.loop())
+
+    def test_loop_failure_event_and_output_fallbacks(self):
+        self.crew.takeoff(self.data)
+        cases = [("PostToolUseFailure", {}), ("PostToolUse", {"is_error": True}),
+                 ("PostToolUse", {"exitCode": 2}), ("PostToolUse", "Exit code 1\nOops"),
+                 ("PostToolUse", {"stdout": "2 failed, 1 passed"}),
+                 ("PostToolUse", {"stderr": "error TS123: bad type"}),
+                 ("PostToolUse", {"stderr": "Error: broken"})]
+        for i, (event, response) in enumerate(cases):
+            with self.subTest(event=event, response=response):
+                kwargs = dict(event=event, response=response, session=f"case-{i}")
+                self.assertIsNone(self.loop(**kwargs))
+                self.assertEqual(self.loop(**kwargs)["hookEventName"], event)
+        self.assertIsNone(self.loop(response={"stdout": "0 failed, 0 errors"}))
+        self.assertIsNone(self.loop())
+
+    def test_loop_non_tests_and_junk_silent(self):
+        self.crew.takeoff(self.data)
+        for command in ("ls", "echo pytest failed", "git status", "cat test.py", "npm install"):
+            self.assertIsNone(self.loop(command=command))
+            self.assertIsNone(self.loop(command=command))
+        for raw in ("bad json", "[]", "null", '{}', '{"tool_input": null}'):
+            self.assertIsNone(self.loop(raw=raw))
+        self.assertIsNone(self.loop(session="../../escape"))
+        self.assertFalse(os.path.exists(os.path.join(self.data, "loops")))
+
+    def test_loop_recognises_runners_and_caps_state(self):
+        self.crew.takeoff(self.data)
+        commands = ["pytest", "python -m pytest", "python3 -m unittest", "npm test", "pnpm run build",
+                    "yarn run test", "node --test", "jest", "vitest", "go test ./...", "cargo test",
+                    "cargo build", "make test", "tsc", "ruff check .", "mypy .", "eslint .", "swift test"]
+        for command in commands:
+            self.assertIsNone(self.loop(command=command))
+            self.assertIsNotNone(self.loop(command=command), command)
+        for i in range(55):
+            self.loop(command=f"pytest test_{i}.py")
+        path = os.path.join(self.data, "loops", "test-session.json")
+        state = json.load(open(path))
+        self.assertEqual(len(state), 50)
+        self.assertTrue(state["pytest"]["nudged"])
+        open(path, "w").write("broken state")
+        self.assertIsNone(self.loop())
+
+    def test_loop_registered_for_both_bash_events(self):
+        path = os.path.join(HERE, "..", "plugins", "crew", "hooks", "hooks.json")
+        hooks = json.load(open(path))["hooks"]
+        for event in ("PostToolUse", "PostToolUseFailure"):
+            self.assertEqual(hooks[event][0]["matcher"], "Bash")
+            self.assertIn("loop_watch.py", hooks[event][0]["hooks"][0]["command"])
+
+    def test_backup_written_with_undo_and_removed_from_both_locations(self):
+        keep = os.path.join(self.tmp, "keep")
+        self.crew.keep(self.data, keep)
+        self.crew.takeoff(self.data)
+        backup = json.load(open(self.crew.BACKUP))
+        self.assertEqual(backup["made_by"], "crew")
+        self.assertIn('set "model" back to "opus"', backup["undo_by_hand"])
+        self.assertIn('remove "advisorModel"', backup["undo_by_hand"])
+        self.assertIn('set "modelSettings.claude-opus-5-5.effortLevel" back to "high"', backup["undo_by_hand"])
+        self.assertIn("delete " + self.explore(), backup["undo_by_hand"])
+        kept = os.path.join(keep, "crew-receipt.json")
+        self.assertEqual(json.load(open(kept)), backup)
+        self.crew.land(self.data)
+        self.assertFalse(os.path.exists(self.crew.BACKUP))
+        self.assertFalse(os.path.exists(kept))
+
+    def test_land_recovers_backup_after_entire_data_folder_lost(self):
+        before = self.raw()
+        keep = os.path.join(self.tmp, "keep")
+        self.crew.keep(self.data, keep)
+        self.crew.takeoff(self.data)
+        shutil.rmtree(self.data)
+        self.crew.land(self.data)
+        self.assertEqual(self.raw(), before)
+        self.assertFalse(os.path.exists(self.explore()))
+        self.assertFalse(os.path.exists(self.crew.BACKUP))
+        self.assertFalse(os.path.exists(os.path.join(keep, "crew-receipt.json")))
+
+    def test_check_reports_backup_without_plugin_data(self):
+        self.crew.takeoff(self.data)
+        shutil.rmtree(self.data)
+        self.assertIn(self.crew.BACKUP, "\n".join(self.crew.check()))
+        self.assertIn("already on", "\n".join(self.crew.takeoff(self.data)))
+
+    def test_foreign_backup_never_deleted_or_used(self):
+        keep = os.path.join(self.tmp, "keep")
+        self.crew.keep(self.data, keep)
+        self.crew.takeoff(self.data)
+        foreign = '{"made_by": "someone else", "precious": true}'
+        for path in (self.crew.BACKUP, os.path.join(keep, "crew-receipt.json")):
+            open(path, "w").write(foreign)
+        self.crew.land(self.data)
+        for path in (self.crew.BACKUP, os.path.join(keep, "crew-receipt.json")):
+            self.assertEqual(open(path).read(), foreign)
+        self.assertIn("Crew is off", "\n".join(self.crew.land(self.data)))
+        self.assertNotIn(self.crew.BACKUP, "\n".join(self.crew.check()))
+        with self.assertRaises(self.crew.Stop):
+            self.crew.takeoff(self.data)
+        self.assertEqual(open(self.crew.BACKUP).read(), foreign)
+
+    def test_failed_land_retains_backup(self):
+        self.crew.takeoff(self.data)
+        self.write(None, raw="broken settings")
+        with self.assertRaises(self.crew.Stop):
+            self.crew.land(self.data)
+        self.assertTrue(os.path.exists(self.crew.BACKUP))
+        self.assertTrue(os.path.exists(os.path.join(self.data, "receipt.json")))
 
     def test_helper_guard(self):
         import subprocess

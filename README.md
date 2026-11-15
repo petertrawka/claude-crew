@@ -30,6 +30,10 @@ to a small model, let simple code pick the model rather than another model, and 
 - **Guards helpers in code, not just in words.** While crew is on, a hook adds "Do not call the advisor tool." to
   every helper's prompt, and turns away a search-only job sent to the general-purpose helper (which runs on your
   main model), pointing Claude to the Haiku helpers instead.
+- **Notices loops.** When the same test or build command fails twice in a row, a hook tells Claude once to stop,
+  say what it tried, and change approach or ask the advisor, instead of a third blind try.
+- **A receipt that survives a wrong-order uninstall.** Takeoff also saves a copy of its receipt, with plain undo
+  steps, at `~/.claude/crew-receipt.json`. Land uses it if crew's own data folder is gone, then deletes it.
 - **Never switches models by itself.** When a job stays stuck, `/crew boost` suggests a fresh chat on Fable; you
   decide.
 - **Shows where your week goes.** `/crew pace` gives one line on how your week compares with a normal week by this
@@ -88,6 +92,7 @@ Land first, then remove:
 If crew is ever uninstalled while still on, `/crew takeoff` printed the old values. Put them back in
 `~/.claude/settings.json`: `model`, `advisorModel` and `modelSettings` → `claude-opus-5-5` → `effortLevel`.
 Then delete `~/.claude/agents/Explore.md` if its second line says "made by crew".
+The same steps are listed under `undo_by_hand` in `~/.claude/crew-receipt.json`; delete that file when done.
 
 ## Requirements
 
